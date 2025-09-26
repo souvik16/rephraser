@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Tone-based Rewriter — Demo</title>
+  <style>
+    :root{font-family:Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#0f172a}
+    body{margin:0;background:#f8fafc;padding:24px;}
+    .container{max-width:900px;margin:0 auto;background:white;padding:20px;border-radius:12px;box-shadow:0 6px 24px rgba(15,23,42,0.06)}
+    h1{font-size:20px;margin:0 0 12px}
+    label{display:block;margin-top:12px;font-weight:600}
+    textarea{width:100%;min-height:120px;padding:10px;border-radius:8px;border:1px solid #e6e9ef;font-size:14px}
+    select,input[type=text]{padding:8px;border-radius:8px;border:1px solid #e6e9ef;width:100%}
+    .row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    button{margin-top:12px;padding:10px 14px;border-radius:8px;border:0;background:#0ea5a4;color:white;font-weight:600;cursor:pointer}
+    .output{white-space:pre-wrap;background:#0f172a;color:#e6f6f6;padding:16px;border-radius:8px;margin-top:12px;min-height:80px}
+    .muted{font-size:13px;color:#64748b;margin-top:8px}
+    .small{font-size:13px}
+    .controls{display:flex;gap:8px;align-items:center;margin-top:10px}
+    .danger{background:#ef4444}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Tone-based Rewriter (HTML demo)</h1>
+    <p class="muted">Enter text, pick the tone and click <strong>Generate</strong>. After result appears you can request a rephrase with extra comments.</p>
+
+    <label for="inputText">Original text</label>
+    <textarea id="inputText" placeholder="Paste or type your text here..."></textarea>
+
+    <div class="row">
+      <div>
+        <label for="tone">Tone</label>
+        <select id="tone">
+          <option>Professional</option>
+          <option>Casual</option>
+          <option>Friendly</option>
+          <option>Assertive</option>
+          <option>Empathetic</option>
+          <option>Concise</option>
+          <option>Elaborative</option>
+          <option>Humorous</option>
+        </select>
+      </div>
+      <div>
+        <label for="temperature">Creativity (0–1)</label>
+        <input id="temperature" type="text" value="0.3" />
+      </div>
+    </div>
+
+    <div class="controls">
+      <button id="generateBtn">Generate</button>
+      <button id="clearBtn" class="danger">Clear</button>
+    </div>
+
+    <div id="status" class="muted small"></div>
+
+    <label for="result">Output</label>
+    <div id="result" class="output">(no output yet)</div>
+
+    <label for="rephraseComment">Ask for rephrase / improvement (optional)</label>
+    <input id="rephraseComment" placeholder="E.g., make it shorter, add a polite closing, increase urgency" />
+    <div class="controls">
+      <button id="rephraseBtn">Rephrase with comments</button>
+      <button id="copyBtn">Copy output</button>
+    </div>
+
+    <p class="muted">Note: This demo calls the OpenAI API directly from the browser which requires exposing your API key — <strong>not recommended for production</strong>. For production, call the API from a server-side endpoint and never expose your API key in client code.</p>
+
+    <hr />
+    <p class="muted small">Place your OpenAI API key in the variable <code>OPENAI_API_KEY</code> below before using this demo. Or better — replace <code>callOpenAi()</code> to point to your own server endpoint.</p>
+  </div>
+
+  <script>
+    // -------------------------
+    // Configuration
+    // -------------------------
+    // WARNING: For demo only. Do NOT ship an API key in client-side code.
+    const OPENAI_API_KEY = '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' // <-- PUT YOUR KEY HERE FOR LOCAL TESTING
+    const OPENAI_MODEL = 'gpt-4o-mini' // change if you want
+    // -------------------------
+
+    const el = id => document.getElementById(id)
+    const status = el('status')
+    const result = el('result')
+
+    function setStatus(text){ status.textContent = text }
+
+    async function callOpenAi(prompt, temperature){
+      // This function calls OpenAI Chat Completions API.
+      // For security use a server-side proxy instead of calling from the client.
+
+      const body = {
+        model: OPENAI_MODEL,
+        messages: [
+          {role: 'system', content: 'You are a helpful assistant that rewrites text based on user-specified tone.'},
+          {role: 'user', content: prompt}
+        ],
+        temperature: Number(temperature)
+      }
+
+      const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + OPENAI_API_KEY
+        },
+        body: JSON.stringify(body)
+      })
+
+      if(!resp.ok){
+        const text = await resp.text()
+        throw new Error('OpenAI API error: ' + resp.status + ' - ' + text)
+      }
+
+      const data = await resp.json()
+      // guided for typical shape: data.choices[0].message.content
+      const content = data?.choices?.[0]?.message?.content || JSON.stringify(data)
+      return content
+    }
+
+    async function generate(){
+      const original = el('inputText').value.trim()
+      const tone = el('tone').value
+      const temperature = el('temperature').value || '0.3'
+      if(!original){ alert('Please enter the text to rewrite.'); return }
+
+      setStatus('Generating...')
+      result.textContent = ''
+      try{
+        const prompt = `Rewrite the following text in the requested tone. Tone: ${tone}\n\nText:\n${original}\n\nRequirements:\n- Keep the meaning unchanged unless the user comment says otherwise.\n- Keep the length similar unless tone calls for concision or elaboration.\n- Return only the rewritten text.`
+        const out = await callOpenAi(prompt, temperature)
+        result.textContent = out.trim()
+        setStatus('Generated successfully')
+      }catch(err){
+        console.error(err)
+        setStatus('Error: ' + err.message)
+        result.textContent = '(error) ' + err.message
+      }
+    }
+
+    async function rephrase(){
+      const current = result.textContent.trim()
+      const comment = el('rephraseComment').value.trim()
+      const temperature = el('temperature').value || '0.3'
+      if(!current || current === '(no output yet)'){ alert('No generated output to rephrase.'); return }
+
+      setStatus('Requesting rephrase...')
+      try{
+        const prompt = `You are to rephrase / improve the provided text using these instructions: ${comment || 'No extra instructions.'}\n\nOriginal generated text:\n${current}\n\nConstraints:\n- Preserve original intent and factual content unless the instructions explicitly ask to change it.\n- Output only the revised text.`
+        const out = await callOpenAi(prompt, temperature)
+        result.textContent = out.trim()
+        setStatus('Rephrase complete')
+      }catch(err){
+        console.error(err)
+        setStatus('Error: ' + err.message)
+      }
+    }
+
+    document.getElementById('generateBtn').addEventListener('click', generate)
+    document.getElementById('rephraseBtn').addEventListener('click', rephrase)
+    document.getElementById('clearBtn').addEventListener('click', ()=>{
+      el('inputText').value=''
+      el('rephraseComment').value=''
+      result.textContent='(no output yet)'
+      setStatus('Cleared')
+    })
+    document.getElementById('copyBtn').addEventListener('click', ()=>{
+      navigator.clipboard.writeText(result.textContent).then(()=>setStatus('Copied to clipboard'))
+    })
+  </script>
+</body>
+</html>
